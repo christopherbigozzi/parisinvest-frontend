@@ -22,7 +22,7 @@ const MONTMARTRE_POLYGON = [
 
 function calcMarge(surface, prixAchat, params) {
   const t = params ? params.travaux     : TRAVAUX_M2;
-  const n = params ? params.notaire/100 : FRAIS_NOTAIRE;
+  const n = 0.08;
   const r = 13500;
   const travaux = surface * t;
   const notaire = prixAchat * n;
@@ -128,7 +128,7 @@ export default function App() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [deleting, setDeleting]     = useState(null);
   const [params, setParams]         = useState({
-    travaux: 1200, notaire: 8
+    travaux: 1200, surfMin: 9, surfMax: 45
   });
 
   const loadData = useCallback(async () => {
@@ -137,6 +137,8 @@ export default function App() {
       let query = supabase
         .from('annonces').select('*')
         .eq('zone', 'montmartre').eq('actif', true)
+        .gte('surface', params.surfMin)
+        .lte('surface', params.surfMax)
         .order('score', { ascending: false }).limit(50);
       if (filtre === 'dpe')    query = query.in('dpe', ['F','G']);
       if (filtre === 'drop')   query = query.gt('nb_baisses', 0);
@@ -303,7 +305,7 @@ export default function App() {
                       {[
                         ['Prix achat',        fmt(a.prix)],
                         ['Travaux (1200€/m²)', fmt(a.surface * params.travaux)],
-                        ['Frais notaire',      fmt(a.prix * params.notaire/100)],
+                        ['Frais notaire (8%)', fmt(a.prix * 0.08)],
                         ['Prix revente est.',  fmt(m.revente)],
                       ].map(([l,v]) => (
                         <div key={l} style={{ background:'#fff', borderRadius:6, padding:'8px 10px', border:'0.5px solid #eee' }}>
@@ -345,7 +347,8 @@ export default function App() {
             <div style={{ fontSize:14, fontWeight:500, marginBottom:12 }}>Paramètres de marge</div>
             {[
               { label:'Travaux/m²',      key:'travaux',  min:600,   max:2000,  step:100, unit:'€' },
-              { label:'Frais notaire',   key:'notaire',  min:5,     max:10,    step:0.5, unit:'%' },
+              { label:'Surface min (m²)', key:'surfMin',  min:9,     max:100,   step:1,   unit:'m²' },
+              { label:'Surface max (m²)', key:'surfMax',  min:20,    max:300,   step:5,   unit:'m²' },
             ].map(({ label, key, min, max, step, unit }) => (
               <div key={key} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
                 <span style={{ fontSize:12, color:'#666', width:110, flexShrink:0 }}>{label}</span>
