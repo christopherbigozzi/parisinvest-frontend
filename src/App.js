@@ -3,9 +3,6 @@ import { supabase } from './supabase';
 
 const TRAVAUX_M2      = 1200;
 const FRAIS_NOTAIRE   = 0.08;
-const DUREE_PORTAGE   = 12;
-const FRAIS_AGENCE    = 0.03;
-const PRIX_REVENTE_M2 = 11500;
 
 const MONTMARTRE_POLYGON = [
   [48.8910, 2.3285],
@@ -19,15 +16,11 @@ const MONTMARTRE_POLYGON = [
 function calcMarge(surface, prixAchat, params) {
   const t = params ? params.travaux     : TRAVAUX_M2;
   const n = params ? params.notaire/100 : FRAIS_NOTAIRE;
-  const p = params ? params.portage     : DUREE_PORTAGE;
-  const a = params ? params.agence/100  : FRAIS_AGENCE;
-  const r = params ? params.revente     : PRIX_REVENTE_M2;
+  const r = 13500;
   const travaux = surface * t;
   const notaire = prixAchat * n;
-  const portage = prixAchat * 0.01 * (p / 12);
   const revente = surface * r;
-  const agence  = revente * a;
-  const cout    = prixAchat + travaux + notaire + portage + agence;
+  const cout    = prixAchat + travaux + notaire;
   const marge   = revente - cout;
   const pct     = (marge / cout) * 100;
   return { marge: Math.round(marge), pct: Math.round(pct*10)/10, revente: Math.round(revente), cout: Math.round(cout) };
@@ -98,7 +91,7 @@ export default function App() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [deleting, setDeleting]     = useState(null);
   const [params, setParams]         = useState({
-    travaux: 1200, notaire: 8, portage: 12, agence: 3, revente: 11500
+    travaux: 1200, notaire: 8
   });
 
   const loadData = useCallback(async () => {
@@ -238,6 +231,9 @@ export default function App() {
                       {a.jours_en_ligne > 30 && <span style={{ fontSize:11, padding:'2px 7px', borderRadius:4, background:'#F4C0D1', color:'#4B1528' }}>{a.jours_en_ligne}j en ligne</span>}
                       {a.nb_baisses > 0 && <span style={{ fontSize:11, padding:'2px 7px', borderRadius:4, background:'#FCEBEB', color:'#501313' }}>↘ {a.nb_baisses} baisse{a.nb_baisses>1?'s':''}</span>}
                       {a.jours_en_ligne <= 1 && <span style={{ fontSize:11, padding:'2px 7px', borderRadius:4, background:'#E6F1FB', color:'#042C53' }}>Nouveau</span>}
+                      {a.jours_en_ligne <= 2 && calcMarge(a.surface, a.prix, params).marge >= 40000 && (
+                        <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4, background:'#D85A30', color:'#fff', fontWeight:700 }}>🔥 Priorité</span>
+                      )}
                     </div>
                     <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                       <span style={{ fontSize:12, color:'#999' }}>{a.adresse} · {a.surface}m²</span>
@@ -269,11 +265,9 @@ export default function App() {
                     <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:10 }}>
                       {[
                         ['Prix achat',        fmt(a.prix)],
-                        ['Travaux',           fmt(a.surface * params.travaux)],
-                        ['Frais notaire',     fmt(a.prix * params.notaire/100)],
-                        ['Portage',           fmt(a.prix * 0.01 * params.portage/12)],
-                        ['Agence revente',    fmt(m.revente * params.agence/100)],
-                        ['Prix revente est.', fmt(m.revente)],
+                        ['Travaux (1200€/m²)', fmt(a.surface * params.travaux)],
+                        ['Frais notaire',      fmt(a.prix * params.notaire/100)],
+                        ['Prix revente est.',  fmt(m.revente)],
                       ].map(([l,v]) => (
                         <div key={l} style={{ background:'#fff', borderRadius:6, padding:'8px 10px', border:'0.5px solid #eee' }}>
                           <div style={{ fontSize:11, color:'#999', marginBottom:2 }}>{l}</div>
@@ -315,9 +309,6 @@ export default function App() {
             {[
               { label:'Travaux/m²',      key:'travaux',  min:600,   max:2000,  step:100, unit:'€' },
               { label:'Frais notaire',   key:'notaire',  min:5,     max:10,    step:0.5, unit:'%' },
-              { label:'Portage (mois)',  key:'portage',  min:6,     max:24,    step:1,   unit:'mois' },
-              { label:'Agence revente',  key:'agence',   min:2,     max:5,     step:0.5, unit:'%' },
-              { label:'Prix revente/m²', key:'revente',  min:9000,  max:14000, step:250, unit:'€' },
             ].map(({ label, key, min, max, step, unit }) => (
               <div key={key} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
                 <span style={{ fontSize:12, color:'#666', width:110, flexShrink:0 }}>{label}</span>
