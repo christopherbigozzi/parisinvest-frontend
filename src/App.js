@@ -5,12 +5,19 @@ const TRAVAUX_M2      = 1200;
 const FRAIS_NOTAIRE   = 0.08;
 
 const MONTMARTRE_POLYGON = [
-  [48.8910, 2.3285],
-  [48.8910, 2.3482],
-  [48.8824, 2.3497],
-  [48.8834, 2.3380],
-  [48.8834, 2.3285],
-  [48.8910, 2.3285],
+  [48.89006616583566, 2.3399816318652427],
+  [48.88968475443497, 2.334657271277621],
+  [48.88672871742938, 2.3332070563311333],
+  [48.88456266233064, 2.3321090364430574],
+  [48.88265536633,    2.338386395424777],
+  [48.88243738501271, 2.3396915888756666],
+  [48.883908740467774,2.346901228893387],
+  [48.88683769885438, 2.347357010733475],
+  [48.88930334012477, 2.346196838776649],
+  [48.89039308757785, 2.3420948022153993],
+  [48.88995719144694, 2.3385935689883013],
+  [48.8897119982031,  2.334553684495063],
+  [48.89006616583566, 2.3399816318652427],
 ];
 
 function calcMarge(surface, prixAchat, params) {
@@ -42,39 +49,69 @@ function isVenduLoue(titre) {
 
 // ─── Carte OpenStreetMap via iframe ───────────────────────────────────────────
 function ZoneMap() {
-  const mapRef = useRef(null);
+  const containerRef = useRef(null);
+  const canvasRef    = useRef(null);
 
   useEffect(() => {
-    const el = mapRef.current;
-    if (!el) return;
+    const iframe = containerRef.current;
+    if (!iframe) return;
+    iframe.src = 'https://www.openstreetmap.org/export/embed.html'
+      + '?bbox=2.3310%2C48.8815%2C2.3485%2C48.8915'
+      + '&layer=mapnik';
+  }, []);
 
-    const pts = MONTMARTRE_POLYGON.map(([lat, lon]) => `${lat},${lon}`).join('|');
-    const center = '48.8872,2.3385';
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    // uMap embed — carte OSM avec polygone dessiné
-    const osmUrl = `https://www.openstreetmap.org/export/embed.html`
-      + `?bbox=2.3250%2C48.8810%2C2.3520%2C48.8930`
-      + `&layer=mapnik`
-      + `&marker=${center}`;
+    const W = canvas.offsetWidth || 268;
+    const H = 220;
+    canvas.width  = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
 
-    el.src = osmUrl;
+    const minLon = 2.3310, maxLon = 2.3485;
+    const minLat = 48.8815, maxLat = 48.8915;
+
+    function toXY(lat, lon) {
+      const x = ((lon - minLon) / (maxLon - minLon)) * W;
+      const y = H - ((lat - minLat) / (maxLat - minLat)) * H;
+      return [x, y];
+    }
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.beginPath();
+    MONTMARTRE_POLYGON.forEach(([lat, lon], i) => {
+      const [x, y] = toXY(lat, lon);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(34, 197, 94, 0.25)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(22, 163, 74, 0.9)';
+    ctx.lineWidth   = 2.5;
+    ctx.stroke();
   }, []);
 
   return (
-    <div style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', border: '0.5px solid #e5e5e5' }}>
+    <div style={{ position:'relative', borderRadius:10, overflow:'hidden', border:'0.5px solid #e5e5e5', height:220 }}>
       <iframe
-        ref={mapRef}
+        ref={containerRef}
         title="Zone Montmartre"
-        width="100%"
-        height="220"
-        style={{ display: 'block', border: 'none' }}
+        width="100%" height="220"
+        style={{ display:'block', border:'none', position:'absolute', top:0, left:0 }}
         allowFullScreen
       />
+      <canvas
+        ref={canvasRef}
+        style={{ position:'absolute', top:0, left:0, width:'100%', height:220, pointerEvents:'none' }}
+      />
       <div style={{
-        position: 'absolute', top: 8, left: 8,
-        background: 'rgba(24,95,165,0.92)', color: '#fff',
-        fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
-        pointerEvents: 'none'
+        position:'absolute', top:8, left:8,
+        background:'rgba(22,163,74,0.92)', color:'#fff',
+        fontSize:11, fontWeight:600, padding:'4px 10px', borderRadius:6,
+        pointerEvents:'none'
       }}>
         Zone 1 — Montmartre 18e
       </div>
