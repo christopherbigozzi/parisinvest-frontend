@@ -282,10 +282,15 @@ export default function App() {
                   </div>
 
                   {a.photo ? (
-                    <img src={a.photo} alt="" style={{ width:80, height:60, objectFit:'cover', borderRadius:6, flexShrink:0 }} onError={e=>e.target.style.display='none'} />
-                  ) : (
-                    <div style={{ width:80, height:60, borderRadius:6, background:'#f0f0f0', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:'#ccc' }}>🏠</div>
-                  )}
+                    <img
+                      src={a.photo}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      style={{ width:80, height:60, objectFit:'cover', borderRadius:6, flexShrink:0 }}
+                      onError={e => { e.target.onerror=null; e.target.src=''; e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                    />
+                  ) : null}
+                  <div style={{ width:80, height:60, borderRadius:6, background:'#f0f0f0', flexShrink:0, display: a.photo ? 'none' : 'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:'#ccc' }}>🏠</div>
 
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13, fontWeight:500, marginBottom:4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.titre}</div>
