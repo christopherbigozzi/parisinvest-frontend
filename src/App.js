@@ -116,6 +116,7 @@ export default function App() {
         .eq('zone','montmartre').eq('actif',true)
         .gte('surface', params.surfMin)
         .lte('surface', params.surfMax)
+        .lte('jours_en_ligne', 100)
         .order('score', { ascending:false }).limit(50);
       if (filtre === 'dpe')    query = query.in('dpe', ['F','G']);
       if (filtre === 'drop')   query = query.gt('nb_baisses', 0);
