@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabase';
 
-const TRAVAUX_M2      = 1200;
-const FRAIS_NOTAIRE   = 0.08;
+const TRAVAUX_M2 = 1200;
 
 const MONTMARTRE_POLYGON = [
   [48.89006616583566, 2.3399816318652427],
@@ -21,16 +20,14 @@ const MONTMARTRE_POLYGON = [
 ];
 
 function calcMarge(surface, prixAchat, params) {
-  const t = params ? params.travaux     : TRAVAUX_M2;
-  const n = 0.08;
-  const r = 13500;
+  const t = params ? params.travaux : TRAVAUX_M2;
   const travaux = surface * t;
-  const notaire = prixAchat * n;
-  const revente = surface * r;
+  const notaire = prixAchat * 0.08;
+  const revente = surface * 13500;
   const cout    = prixAchat + travaux + notaire;
   const marge   = revente - cout;
   const pct     = (marge / cout) * 100;
-  return { marge: Math.round(marge), pct: Math.round(pct*10)/10, revente: Math.round(revente), cout: Math.round(cout) };
+  return { marge: Math.round(marge), pct: Math.round(pct*10)/10, revente: Math.round(revente) };
 }
 
 function fmt(n) { return Math.round(n).toLocaleString('fr-FR') + ' €'; }
@@ -47,7 +44,6 @@ function isVenduLoue(titre) {
          t.includes('locataire') || t.includes('investisseur') || t.includes('invest');
 }
 
-// ─── Carte OpenStreetMap via iframe ───────────────────────────────────────────
 function ZoneMap() {
   const containerRef = useRef(null);
   const canvasRef    = useRef(null);
@@ -63,56 +59,38 @@ function ZoneMap() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const W = canvas.offsetWidth || 268;
     const H = 220;
     canvas.width  = W;
     canvas.height = H;
     const ctx = canvas.getContext('2d');
-
     const minLon = 2.3310, maxLon = 2.3485;
     const minLat = 48.8815, maxLat = 48.8915;
-
     function toXY(lat, lon) {
-      const x = ((lon - minLon) / (maxLon - minLon)) * W;
-      const y = H - ((lat - minLat) / (maxLat - minLat)) * H;
-      return [x, y];
+      return [((lon-minLon)/(maxLon-minLon))*W, H-((lat-minLat)/(maxLat-minLat))*H];
     }
-
     ctx.clearRect(0, 0, W, H);
     ctx.beginPath();
     MONTMARTRE_POLYGON.forEach(([lat, lon], i) => {
       const [x, y] = toXY(lat, lon);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.closePath();
-    ctx.fillStyle   = 'rgba(34, 197, 94, 0.25)';
+    ctx.fillStyle   = 'rgba(34,197,94,0.25)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(22, 163, 74, 0.9)';
+    ctx.strokeStyle = 'rgba(22,163,74,0.9)';
     ctx.lineWidth   = 2.5;
     ctx.stroke();
   }, []);
 
   return (
     <div style={{ position:'relative', borderRadius:10, overflow:'hidden', border:'0.5px solid #e5e5e5', height:220 }}>
-      <iframe
-        ref={containerRef}
-        title="Zone Montmartre"
-        width="100%" height="220"
-        style={{ display:'block', border:'none', position:'absolute', top:0, left:0 }}
-        allowFullScreen
-      />
-      <canvas
-        ref={canvasRef}
-        style={{ position:'absolute', top:0, left:0, width:'100%', height:220, pointerEvents:'none' }}
-      />
-      <div style={{
-        position:'absolute', top:8, left:8,
-        background:'rgba(22,163,74,0.92)', color:'#fff',
-        fontSize:11, fontWeight:600, padding:'4px 10px', borderRadius:6,
-        pointerEvents:'none'
-      }}>
+      <iframe ref={containerRef} title="Zone Montmartre" width="100%" height="220"
+        style={{ display:'block', border:'none', position:'absolute', top:0, left:0 }} allowFullScreen />
+      <canvas ref={canvasRef}
+        style={{ position:'absolute', top:0, left:0, width:'100%', height:220, pointerEvents:'none' }} />
+      <div style={{ position:'absolute', top:8, left:8, background:'rgba(22,163,74,0.92)', color:'#fff',
+        fontSize:11, fontWeight:600, padding:'4px 10px', borderRadius:6, pointerEvents:'none' }}>
         Zone 1 — Montmartre 18e
       </div>
     </div>
@@ -121,34 +99,37 @@ function ZoneMap() {
 
 export default function App() {
   const [annonces, setAnnonces]     = useState([]);
-  const [stats, setStats]           = useState({ total: 0, nouvelles: 0, marge_moy: 0 });
+  const [stats, setStats]           = useState({ total:0, nouvelles:0, marge_moy:0, nb_likes:0 });
   const [loading, setLoading]       = useState(true);
   const [filtre, setFiltre]         = useState('all');
   const [openId, setOpenId]         = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [deleting, setDeleting]     = useState(null);
-  const [params, setParams]         = useState({
-    travaux: 1200, surfMin: 9, surfMax: 45
-  });
+  const [liking, setLiking]         = useState(null);
+  const [likedIds, setLikedIds]     = useState(new Set());
+  const [params, setParams]         = useState({ travaux:1200, surfMin:9, surfMax:45 });
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      let query = supabase
-        .from('annonces').select('*')
-        .eq('zone', 'montmartre').eq('actif', true)
+      let query = supabase.from('annonces').select('*')
+        .eq('zone','montmartre').eq('actif',true)
         .gte('surface', params.surfMin)
         .lte('surface', params.surfMax)
-        .order('score', { ascending: false }).limit(50);
+        .order('score', { ascending:false }).limit(50);
       if (filtre === 'dpe')    query = query.in('dpe', ['F','G']);
       if (filtre === 'drop')   query = query.gt('nb_baisses', 0);
       if (filtre === 'new')    query = query.lte('jours_en_ligne', 3);
       if (filtre === 'margin') query = query.gte('marge_pct', 10);
       if (filtre === 'loue')   query = query.ilike('titre', '%lou%');
+      if (filtre === 'liked') {
+        const ids = [...likedIds];
+        if (ids.length === 0) { setAnnonces([]); setLoading(false); return; }
+        query = supabase.from('annonces').select('*').in('id', ids).eq('actif',true);
+      }
 
       const { data, error } = await query;
       if (error) throw error;
-
       setAnnonces(data || []);
       setLastUpdate(new Date());
 
@@ -156,26 +137,73 @@ export default function App() {
         .eq('zone','montmartre').eq('actif',true);
       const { count: nouvelles } = await supabase.from('annonces').select('*', { count:'exact', head:true })
         .eq('zone','montmartre').eq('actif',true).lte('jours_en_ligne',1);
+      const { count: nb_likes } = await supabase.from('feedbacks').select('*', { count:'exact', head:true })
+        .eq('signal','like');
 
       const rows   = data || [];
       const marges = rows.map(a => calcMarge(a.surface, a.prix, params).pct).filter(p => p > 0);
       const moy    = marges.length ? Math.round(marges.reduce((a,b)=>a+b,0)/marges.length*10)/10 : 0;
-      setStats({ total: count||0, nouvelles: nouvelles||0, marge_moy: moy });
+      setStats({ total:count||0, nouvelles:nouvelles||0, marge_moy:moy, nb_likes:nb_likes||0 });
+
+      // Charger les likes existants
+      const { data: feedbacks } = await supabase.from('feedbacks')
+        .select('annonce_id').eq('signal','like');
+      if (feedbacks) setLikedIds(new Set(feedbacks.map(f => f.annonce_id)));
+
     } catch (err) { console.error(err); }
     setLoading(false);
-  }, [filtre, params]);
+  }, [filtre, params, likedIds.size]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [filtre, params]);
 
-  async function supprimerAnnonce(e, id) {
+  async function supprimerAnnonce(e, annonce) {
     e.stopPropagation();
     if (!window.confirm('Supprimer cette annonce du dashboard ?')) return;
-    setDeleting(id);
+    setDeleting(annonce.id);
     try {
-      await supabase.from('annonces').update({ actif: false }).eq('id', id);
-      setAnnonces(prev => prev.filter(a => a.id !== id));
+      await supabase.from('annonces').update({ actif:false }).eq('id', annonce.id);
+      // Enregistrer le dislike pour le ML
+      await supabase.from('feedbacks').insert({
+        annonce_id:    annonce.id,
+        signal:        'dislike',
+        surface:       annonce.surface,
+        prix_m2:       annonce.prix_m2,
+        dpe:           annonce.dpe || '',
+        marge_pct:     annonce.marge_pct,
+        jours_en_ligne: annonce.jours_en_ligne || 0,
+        nb_baisses:    annonce.nb_baisses || 0,
+      });
+      setAnnonces(prev => prev.filter(a => a.id !== annonce.id));
     } catch (err) { console.error(err); }
     setDeleting(null);
+  }
+
+  async function likerAnnonce(e, annonce) {
+    e.stopPropagation();
+    setLiking(annonce.id);
+    try {
+      const isLiked = likedIds.has(annonce.id);
+      if (isLiked) {
+        // Retirer le like
+        await supabase.from('feedbacks')
+          .delete().eq('annonce_id', annonce.id).eq('signal','like');
+        setLikedIds(prev => { const s = new Set(prev); s.delete(annonce.id); return s; });
+      } else {
+        // Ajouter le like
+        await supabase.from('feedbacks').insert({
+          annonce_id:    annonce.id,
+          signal:        'like',
+          surface:       annonce.surface,
+          prix_m2:       annonce.prix_m2,
+          dpe:           annonce.dpe || '',
+          marge_pct:     annonce.marge_pct,
+          jours_en_ligne: annonce.jours_en_ligne || 0,
+          nb_baisses:    annonce.nb_baisses || 0,
+        });
+        setLikedIds(prev => new Set([...prev, annonce.id]));
+      }
+    } catch (err) { console.error(err); }
+    setLiking(null);
   }
 
   return (
@@ -201,13 +229,13 @@ export default function App() {
         {[
           { label:'Annonces analysées',  val:stats.total.toLocaleString('fr-FR'), sub:`+${stats.nouvelles} aujourd'hui` },
           { label:'Marge nette moyenne', val:stats.marge_moy+'%',                  sub:'Top 50 annonces' },
+          { label:'Profil ML',           val:`${stats.nb_likes} ❤️`,              sub: stats.nb_likes >= 3 ? 'ML actif ✓' : `Encore ${3-stats.nb_likes} likes pour activer` },
           { label:'Zone active',         val:'Montmartre',                          sub:'75018 Paris' },
-          { label:'Sources',             val:'Melo API',                            sub:'900+ portails agrégés' },
         ].map((m,i) => (
           <div key={i} style={{ background:'#f0f0f0', borderRadius:8, padding:'14px 16px' }}>
             <div style={{ fontSize:12, color:'#666', marginBottom:6 }}>{m.label}</div>
             <div style={{ fontSize:20, fontWeight:600, color:'#111' }}>{m.val}</div>
-            <div style={{ fontSize:11, color:'#999', marginTop:3 }}>{m.sub}</div>
+            <div style={{ fontSize:11, color: i===2 && stats.nb_likes>=3 ? '#27500A' : '#999', marginTop:3 }}>{m.sub}</div>
           </div>
         ))}
       </div>
@@ -219,7 +247,7 @@ export default function App() {
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 16px 0', flexWrap:'wrap', gap:8, marginBottom:10 }}>
             <span style={{ fontSize:14, fontWeight:500 }}>Top annonces — Montmartre 18e</span>
             <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-              {[['all','Tous'],['dpe','DPE F/G'],['drop','Baisses'],['new','Nouvelles'],['margin','Marge >10%'],['loue','Vendu loué']].map(([k,l]) => (
+              {[['all','Tous'],['dpe','DPE F/G'],['drop','Baisses'],['new','Nouvelles'],['margin','Marge >10%'],['loue','Vendu loué'],['liked','❤️ Mes likes']].map(([k,l]) => (
                 <button key={k} onClick={()=>setFiltre(k)} style={{
                   fontSize:12, padding:'4px 10px', borderRadius:20, cursor:'pointer',
                   background: filtre===k ? '#185FA5' : 'transparent',
@@ -235,32 +263,30 @@ export default function App() {
           ) : annonces.length === 0 ? (
             <div style={{ padding:40, textAlign:'center', color:'#999', fontSize:14 }}>Aucune annonce pour ce filtre</div>
           ) : annonces.map((a, i) => {
-            const isOpen   = openId === a.id;
-            const m        = calcMarge(a.surface, a.prix, params);
-            const mColor   = m.pct >= 15 ? '#27500A' : m.pct >= 8 ? '#854F0B' : '#A32D2D';
+            const isOpen    = openId === a.id;
+            const m         = calcMarge(a.surface, a.prix, params);
+            const mColor    = m.pct >= 15 ? '#27500A' : m.pct >= 8 ? '#854F0B' : '#A32D2D';
             const venduLoue = isVenduLoue(a.titre);
+            const isLiked   = likedIds.has(a.id);
 
             return (
               <div key={a.id} style={{ opacity: deleting===a.id ? 0.4 : 1, transition:'opacity .2s' }}>
                 <div
                   onClick={() => setOpenId(isOpen ? null : a.id)}
-                  style={{ display:'flex', gap:12, padding:'12px 16px', borderBottom:'0.5px solid #f0f0f0', cursor:'pointer', alignItems:'flex-start', background: venduLoue ? '#fdf8ff' : '#fff' }}
-                  onMouseEnter={e => e.currentTarget.style.background = venduLoue ? '#f5eeff' : '#fafafa'}
-                  onMouseLeave={e => e.currentTarget.style.background = venduLoue ? '#fdf8ff' : '#fff'}
+                  style={{ display:'flex', gap:12, padding:'12px 16px', borderBottom:'0.5px solid #f0f0f0', cursor:'pointer', alignItems:'flex-start', background: isLiked ? '#fff8f0' : venduLoue ? '#fdf8ff' : '#fff' }}
+                  onMouseEnter={e => e.currentTarget.style.background = isLiked ? '#fff3e6' : venduLoue ? '#f5eeff' : '#fafafa'}
+                  onMouseLeave={e => e.currentTarget.style.background = isLiked ? '#fff8f0' : venduLoue ? '#fdf8ff' : '#fff'}
                 >
-                  {/* Rang */}
                   <div style={{ width:28, height:28, borderRadius:'50%', background:rankBg[Math.min(i,4)], color:rankText[Math.min(i,4)], display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:500, flexShrink:0, marginTop:2 }}>
                     #{i+1}
                   </div>
 
-                  {/* Photo */}
                   {a.photo ? (
                     <img src={a.photo} alt="" style={{ width:80, height:60, objectFit:'cover', borderRadius:6, flexShrink:0 }} onError={e=>e.target.style.display='none'} />
                   ) : (
                     <div style={{ width:80, height:60, borderRadius:6, background:'#f0f0f0', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:'#ccc' }}>🏠</div>
                   )}
 
-                  {/* Infos */}
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13, fontWeight:500, marginBottom:4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.titre}</div>
                     <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:5 }}>
@@ -283,27 +309,33 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Prix + marge + poubelle */}
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4, flexShrink:0 }}>
                     <div style={{ fontSize:15, fontWeight:500 }}>{fmt(a.prix)}</div>
                     <div style={{ fontSize:11, color:'#999' }}>{Math.round(a.prix_m2).toLocaleString('fr-FR')} €/m²</div>
                     <div style={{ fontSize:12, fontWeight:500, color:mColor }}>{fmt(m.marge)}</div>
                     <div style={{ fontSize:11, color:mColor }}>{m.pct}% marge</div>
-                    <button
-                      onClick={e => supprimerAnnonce(e, a.id)}
-                      disabled={deleting === a.id}
-                      title="Retirer du dashboard"
-                      style={{ marginTop:4, width:28, height:28, borderRadius:6, border:'0.5px solid #fcc', background:'#fff5f5', cursor:'pointer', fontSize:14, display:'flex', alignItems:'center', justifyContent:'center', color:'#e53e3e' }}
-                    >🗑</button>
+                    <div style={{ display:'flex', gap:4, marginTop:4 }}>
+                      <button
+                        onClick={e => likerAnnonce(e, a)}
+                        disabled={liking === a.id}
+                        title={isLiked ? 'Retirer le like' : "J'aime ce type de bien"}
+                        style={{ width:28, height:28, borderRadius:6, border:`0.5px solid ${isLiked ? '#f97316' : '#e5e5e5'}`, background: isLiked ? '#fff3e6' : '#fafafa', cursor:'pointer', fontSize:14, display:'flex', alignItems:'center', justifyContent:'center' }}
+                      >{isLiked ? '❤️' : '🤍'}</button>
+                      <button
+                        onClick={e => supprimerAnnonce(e, a)}
+                        disabled={deleting === a.id}
+                        title="Retirer du dashboard"
+                        style={{ width:28, height:28, borderRadius:6, border:'0.5px solid #fcc', background:'#fff5f5', cursor:'pointer', fontSize:14, display:'flex', alignItems:'center', justifyContent:'center', color:'#e53e3e' }}
+                      >🗑</button>
+                    </div>
                   </div>
                 </div>
 
-                {/* Détail marge */}
                 {isOpen && (
                   <div style={{ background:'#f8f8f8', padding:'12px 16px 14px 56px', borderBottom:'0.5px solid #f0f0f0' }}>
                     <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:10 }}>
                       {[
-                        ['Prix achat',        fmt(a.prix)],
+                        ['Prix achat',         fmt(a.prix)],
                         ['Travaux (1200€/m²)', fmt(a.surface * params.travaux)],
                         ['Frais notaire (8%)', fmt(a.prix * 0.08)],
                         ['Prix revente est.',  fmt(m.revente)],
@@ -333,7 +365,6 @@ export default function App() {
         {/* Panneau droit */}
         <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
 
-          {/* Carte OSM */}
           <div style={{ background:'#fff', border:'0.5px solid #e5e5e5', borderRadius:12, padding:'14px 16px' }}>
             <div style={{ fontSize:14, fontWeight:500, marginBottom:10 }}>Zone 1 — Montmartre</div>
             <ZoneMap />
@@ -342,13 +373,28 @@ export default function App() {
             </div>
           </div>
 
-          {/* Paramètres marge */}
+          {/* Profil ML */}
+          <div style={{ background:'#fff', border:`0.5px solid ${stats.nb_likes >= 3 ? '#f97316' : '#e5e5e5'}`, borderRadius:12, padding:'14px 16px' }}>
+            <div style={{ fontSize:14, fontWeight:500, marginBottom:6 }}>
+              Profil d'investissement
+              {stats.nb_likes >= 3 && <span style={{ marginLeft:8, fontSize:11, background:'#fff3e6', color:'#c2410c', padding:'2px 7px', borderRadius:10 }}>ML actif</span>}
+            </div>
+            <div style={{ fontSize:12, color:'#666', lineHeight:1.6 }}>
+              {stats.nb_likes === 0
+                ? 'Likez des annonces ❤️ pour que le dashboard apprenne vos préférences et remonte les biens similaires.'
+                : stats.nb_likes < 3
+                ? `${stats.nb_likes} like${stats.nb_likes>1?'s':''} · encore ${3-stats.nb_likes} pour activer le scoring ML.`
+                : `${stats.nb_likes} likes enregistrés · le scoring ML est actif et influence le classement (+25 pts max).`
+              }
+            </div>
+          </div>
+
           <div style={{ background:'#fff', border:'0.5px solid #e5e5e5', borderRadius:12, padding:'14px 16px' }}>
             <div style={{ fontSize:14, fontWeight:500, marginBottom:12 }}>Paramètres de marge</div>
             {[
-              { label:'Travaux/m²',      key:'travaux',  min:600,   max:2000,  step:100, unit:'€' },
-              { label:'Surface min (m²)', key:'surfMin',  min:9,     max:100,   step:1,   unit:'m²' },
-              { label:'Surface max (m²)', key:'surfMax',  min:20,    max:300,   step:5,   unit:'m²' },
+              { label:'Travaux/m²',       key:'travaux', min:600,  max:2000, step:100, unit:'€' },
+              { label:'Surface min (m²)', key:'surfMin', min:9,    max:100,  step:1,   unit:'m²' },
+              { label:'Surface max (m²)', key:'surfMax', min:20,   max:300,  step:5,   unit:'m²' },
             ].map(({ label, key, min, max, step, unit }) => (
               <div key={key} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
                 <span style={{ fontSize:12, color:'#666', width:110, flexShrink:0 }}>{label}</span>
@@ -356,13 +402,12 @@ export default function App() {
                   onChange={e => setParams(p => ({ ...p, [key]: parseFloat(e.target.value) }))}
                   style={{ flex:1 }} />
                 <span style={{ fontSize:12, fontWeight:500, minWidth:54, textAlign:'right' }}>
-                  {key==='revente'||key==='travaux' ? params[key].toLocaleString('fr-FR') : params[key]}{unit}
+                  {key==='travaux' ? params[key].toLocaleString('fr-FR') : params[key]}{unit}
                 </span>
               </div>
             ))}
           </div>
 
-          {/* Sources */}
           <div style={{ background:'#fff', border:'0.5px solid #e5e5e5', borderRadius:12, padding:'14px 16px' }}>
             <div style={{ fontSize:14, fontWeight:500, marginBottom:10 }}>Sources actives</div>
             {[
