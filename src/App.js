@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabase';
 
-const TRAVAUX_M2 = 1200;
+const TRAVAUX_M2  = 1200;
+const PROXY_URL   = process.env.REACT_APP_IMAGE_PROXY_URL || '';
+
+function proxyImg(url) {
+  if (!url || !PROXY_URL) return url;
+  return `${PROXY_URL}/image?url=${encodeURIComponent(url)}`;
+}
 
 const MONTMARTRE_POLYGON = [
   [48.89006616583566, 2.3399816318652427],
@@ -284,7 +290,7 @@ export default function App() {
 
                   {a.photo ? (
                     <img
-                      src={a.photo}
+                      src={proxyImg(a.photo)}
                       alt=""
                       referrerPolicy="no-referrer"
                       style={{ width:80, height:60, objectFit:'cover', borderRadius:6, flexShrink:0 }}
