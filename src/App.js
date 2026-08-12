@@ -1,11 +1,25 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabase';
 
-const TRAVAUX_M2  = 1200;
-const PROXY_URL   = process.env.REACT_APP_IMAGE_PROXY_URL || '';
+// Ces valeurs doivent rester identiques à celles de config.py côté worker.
+// Toute divergence fait mentir le dashboard sur les annonces qu'il classe.
+const TRAVAUX_M2      = 1200;
+const NOTAIRE         = 0.08;
+const REVENTE_M2      = 13000;
+const PRIX_M2_REF     = 10100;
+const PORTAGE_MOIS    = 12;
+const TAUX_FINANCE    = 0.045;
+const CHARGES_M2_AN   = 45;
+const AGENCE_REVENTE  = 0.03;
+
+// Le proxy d'images est désormais une fonction serverless servie par Vercel
+// à côté du front, sur /api/image. Plus besoin de pointer vers un serveur
+// séparé : l'origine par défaut est celle du site lui-même.
+// REACT_APP_IMAGE_PROXY_URL reste utilisable pour viser un autre déploiement.
+const PROXY_URL = process.env.REACT_APP_IMAGE_PROXY_URL || '/api';
 
 function proxyImg(url) {
-  if (!url || !PROXY_URL) return url;
+  if (!url) return url;
   return `${PROXY_URL}/image?url=${encodeURIComponent(url)}`;
 }
 
@@ -25,15 +39,89 @@ const MONTMARTRE_POLYGON = [
   [48.89006616583566, 2.3399816318652427],
 ];
 
+// Miroir exact de scoring.calculer_marge côté Python. Marge AVANT fiscalité :
+// le régime d'imposition se traite au cas par cas sur les annonces retenues.
 function calcMarge(surface, prixAchat, params) {
-  const t = params ? params.travaux : TRAVAUX_M2;
-  const travaux = surface * t;
-  const notaire = prixAchat * 0.08;
-  const revente = surface * 13500;
-  const cout    = prixAchat + travaux + notaire;
-  const marge   = revente - cout;
-  const pct     = (marge / cout) * 100;
-  return { marge: Math.round(marge), pct: Math.round(pct*10)/10, revente: Math.round(revente) };
+  const travauxM2 = params ? params.travaux : TRAVAUX_M2;
+  const reventeM2 = params && params.revente ? params.revente : REVENTE_M2;
+  if (!surface || !prixAchat) {
+    return { marge: 0, pct: 0, revente: 0, travaux: 0, notaire: 0, portage: 0,
+             fraisRevente: 0, cout: 0 };
+  }
+
+  const travaux = surface * travauxM2;
+  const notaire = prixAchat * NOTAIRE;
+  const annees  = PORTAGE_MOIS / 12;
+  const portage = (prixAchat + travaux) * TAUX_FINANCE * annees
+                + surface * CHARGES_M2_AN * annees;
+
+  const revente      = surface * reventeM2;
+  const fraisRevente = revente * AGENCE_REVENTE;
+  const cout         = prixAchat + travaux + notaire + portage + fraisRevente;
+  const marge        = revente - cout;
+
+  return {
+    marge:        Math.round(marge),
+    pct:          Math.round((marge / cout) * 1000) / 10,
+    revente:      Math.round(revente),
+    travaux:      Math.round(travaux),
+    notaire:      Math.round(notaire),
+    portage:      Math.round(portage),
+    fraisRevente: Math.round(fraisRevente),
+    cout:         Math.round(cout),
+  };
+}
+
+// Miroir de scoring.calculer_score. Recalculé ici pour que les curseurs
+// réordonnent réellement la liste : la version précédente changeait la marge
+// affichée sans toucher au classement, qui restait figé sur le score enregistré
+// en base avec 1 200 €/m² de travaux.
+const MOTS_TRAVAUX = /(à rénover|a renover|à rafraîchir|a rafraichir|travaux|plateau|dans son jus|à restaurer|a restaurer|succession|potentiel)/i;
+const MOTS_REFAIT  = /(refait à neuf|refait a neuf|entièrement rénové|entierement renove|prestations haut de gamme|standing)/i;
+
+function paliers(valeur, table, defaut = 0) {
+  for (const [seuil, points] of table) if (valeur >= seuil) return points;
+  return defaut;
+}
+
+function calcScore(a, marge) {
+  const jours = a.jours_en_ligne || 0;
+  let score = 0;
+
+  if      (jours <= 0)  score += 20;
+  else if (jours <= 1)  score += 18;
+  else if (jours <= 3)  score += 14;
+  else if (jours <= 7)  score += 9;
+  else if (jours <= 14) score += 5;
+  else if (jours <= 30) score += 2;
+
+  score += paliers(marge.pct, [[30,25],[25,21],[20,17],[15,12],[10,7],[5,3]],
+                   marge.pct > 0 ? 1 : 0);
+
+  const ref = a.prix_m2_ref || PRIX_M2_REF;
+  if (a.prix_m2 > 0 && ref > 0) {
+    const decote = (ref - a.prix_m2) / ref;
+    score += paliers(decote, [[0.25,25],[0.20,21],[0.15,17],[0.10,12],[0.05,6]],
+                     decote >= 0 ? 2 : 0);
+  }
+
+  const dpePoints = { G:5, F:4, E:3, D:2, C:1, B:0, A:0 };
+  const dpe = (a.dpe || '').toUpperCase().slice(0,1);
+  if (dpe in dpePoints) {
+    score += dpePoints[dpe];
+  } else {
+    const texte = `${a.titre || ''} ${a.description || ''}`;
+    score += MOTS_REFAIT.test(texte) ? 0 : MOTS_TRAVAUX.test(texte) ? 5 : 2;
+  }
+
+  // Le score ML est calculé côté worker : on reprend sa contribution telle
+  // qu'elle a été enregistrée plutôt que de la recalculer ici.
+  score += Math.min(Math.max((a.score_ml || 0), 0), 25);
+
+  const b = a.nb_baisses || 0;
+  score += b >= 3 ? 5 : b === 2 ? 3 : b === 1 ? 1 : 0;
+
+  return Math.max(0, Math.min(Math.round(score), 100));
 }
 
 function fmt(n) { return Math.round(n).toLocaleString('fr-FR') + ' €'; }
@@ -113,17 +201,24 @@ export default function App() {
   const [deleting, setDeleting]     = useState(null);
   const [liking, setLiking]         = useState(null);
   const [likedIds, setLikedIds]     = useState(new Set());
-  const [params, setParams]         = useState({ travaux:1200, surfMin:9, surfMax:45 });
+  const [maskedIds, setMaskedIds]   = useState(new Set());
+  // surfMax était plafonné à 45 m² : les biens plus grands n'apparaissaient
+  // jamais, quel que soit leur intérêt.
+  const [params, setParams]         = useState({
+    travaux: TRAVAUX_M2, revente: REVENTE_M2, surfMin: 25, surfMax: 200,
+  });
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      // principal = true : une seule ligne par bien, même s'il est publié
+      // sur plusieurs portails.
       let query = supabase.from('annonces').select('*')
-        .eq('zone','montmartre').eq('actif',true)
+        .eq('zone','montmartre').eq('actif',true).eq('principal',true)
         .gte('surface', params.surfMin)
         .lte('surface', params.surfMax)
         .lte('jours_en_ligne', 100)
-        .order('score', { ascending:false }).limit(50);
+        .order('score', { ascending:false }).limit(80);
       if (filtre === 'dpe')    query = query.in('dpe', ['F','G']);
       if (filtre === 'drop')   query = query.gt('nb_baisses', 0);
       if (filtre === 'new')    query = query.lte('jours_en_ligne', 3);
@@ -137,7 +232,14 @@ export default function App() {
 
       const { data, error } = await query;
       if (error) throw error;
-      setAnnonces(data || []);
+
+      // Reclassement local : le score enregistré en base suppose les valeurs
+      // par défaut. Dès que les curseurs bougent, l'ordre doit suivre.
+      const classees = (data || [])
+        .map(a => ({ ...a, _score: calcScore(a, calcMarge(a.surface, a.prix, params)) }))
+        .sort((x, y) => y._score - x._score);
+
+      setAnnonces(classees);
       setLastUpdate(new Date());
 
       const { count } = await supabase.from('annonces').select('*', { count:'exact', head:true })
@@ -152,10 +254,14 @@ export default function App() {
       const moy    = marges.length ? Math.round(marges.reduce((a,b)=>a+b,0)/marges.length*10)/10 : 0;
       setStats({ total:count||0, nouvelles:nouvelles||0, marge_moy:moy, nb_likes:nb_likes||0 });
 
-      // Charger les likes existants
+      // Likes et masquages viennent tous deux de feedbacks : depuis le
+      // verrouillage RLS, le front n'écrit plus dans annonces.
       const { data: feedbacks } = await supabase.from('feedbacks')
-        .select('annonce_id').eq('signal','like');
-      if (feedbacks) setLikedIds(new Set(feedbacks.map(f => f.annonce_id)));
+        .select('annonce_id, signal');
+      if (feedbacks) {
+        setLikedIds(new Set(feedbacks.filter(f => f.signal === 'like').map(f => f.annonce_id)));
+        setMaskedIds(new Set(feedbacks.filter(f => f.signal === 'dislike').map(f => f.annonce_id)));
+      }
 
     } catch (err) { console.error(err); }
     setLoading(false);
@@ -163,13 +269,14 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [filtre, params]);
 
-  async function supprimerAnnonce(e, annonce) {
+  // Le bouton ne désactive plus l'annonce en base : depuis le verrouillage
+  // RLS, la clé anon n'a plus le droit d'écrire dans annonces — et c'est très
+  // bien, elle est publique. Le masquage passe par un dislike, ce qui a
+  // l'avantage de continuer à nourrir le scoring ML.
+  async function masquerAnnonce(e, annonce) {
     e.stopPropagation();
-    if (!window.confirm('Supprimer cette annonce du dashboard ?')) return;
     setDeleting(annonce.id);
     try {
-      await supabase.from('annonces').update({ actif:false }).eq('id', annonce.id);
-      // Enregistrer le dislike pour le ML
       await supabase.from('feedbacks').insert({
         annonce_id:    annonce.id,
         signal:        'dislike',
@@ -180,6 +287,7 @@ export default function App() {
         jours_en_ligne: annonce.jours_en_ligne || 0,
         nb_baisses:    annonce.nb_baisses || 0,
       });
+      setMaskedIds(prev => new Set([...prev, annonce.id]));
       setAnnonces(prev => prev.filter(a => a.id !== annonce.id));
     } catch (err) { console.error(err); }
     setDeleting(null);
@@ -269,8 +377,9 @@ export default function App() {
             <div style={{ padding:40, textAlign:'center', color:'#999', fontSize:14 }}>Chargement...</div>
           ) : annonces.length === 0 ? (
             <div style={{ padding:40, textAlign:'center', color:'#999', fontSize:14 }}>Aucune annonce pour ce filtre</div>
-          ) : annonces.map((a, i) => {
+          ) : annonces.filter(a => !maskedIds.has(a.id)).map((a, i) => {
             const isOpen    = openId === a.id;
+            const score     = a._score != null ? a._score : (a.score || 0);
             const m         = calcMarge(a.surface, a.prix, params);
             const mColor    = m.pct >= 15 ? '#27500A' : m.pct >= 8 ? '#854F0B' : '#A32D2D';
             const venduLoue = isVenduLoue(a.titre);
@@ -315,9 +424,9 @@ export default function App() {
                     <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                       <span style={{ fontSize:12, color:'#999' }}>{a.adresse} · {a.surface}m²</span>
                       <div style={{ flex:1, height:3, background:'#eee', borderRadius:2, overflow:'hidden' }}>
-                        <div style={{ height:'100%', width:`${a.score||0}%`, background:'#185FA5', borderRadius:2 }} />
+                        <div style={{ height:'100%', width:`${score}%`, background:'#185FA5', borderRadius:2 }} />
                       </div>
-                      <span style={{ fontSize:11, color:'#666', minWidth:40, textAlign:'right' }}>{a.score||0}/100</span>
+                      <span style={{ fontSize:11, color:'#666', minWidth:40, textAlign:'right' }}>{score}/100</span>
                     </div>
                   </div>
 
@@ -334,9 +443,9 @@ export default function App() {
                         style={{ width:28, height:28, borderRadius:6, border:`0.5px solid ${isLiked ? '#f97316' : '#e5e5e5'}`, background: isLiked ? '#fff3e6' : '#fafafa', cursor:'pointer', fontSize:14, display:'flex', alignItems:'center', justifyContent:'center' }}
                       >{isLiked ? '❤️' : '🤍'}</button>
                       <button
-                        onClick={e => supprimerAnnonce(e, a)}
+                        onClick={e => masquerAnnonce(e, a)}
                         disabled={deleting === a.id}
-                        title="Retirer du dashboard"
+                        title="Masquer — enregistré comme dislike pour affiner le scoring"
                         style={{ width:28, height:28, borderRadius:6, border:'0.5px solid #fcc', background:'#fff5f5', cursor:'pointer', fontSize:14, display:'flex', alignItems:'center', justifyContent:'center', color:'#e53e3e' }}
                       >🗑</button>
                     </div>
@@ -347,10 +456,12 @@ export default function App() {
                   <div style={{ background:'#f8f8f8', padding:'12px 16px 14px 56px', borderBottom:'0.5px solid #f0f0f0' }}>
                     <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:10 }}>
                       {[
-                        ['Prix achat',         fmt(a.prix)],
-                        ['Travaux (1200€/m²)', fmt(a.surface * params.travaux)],
-                        ['Frais notaire (8%)', fmt(a.prix * 0.08)],
-                        ['Prix revente est.',  fmt(m.revente)],
+                        ['Prix achat',                            fmt(a.prix)],
+                        [`Travaux (${params.travaux} €/m²)`,      fmt(m.travaux)],
+                        ['Frais notaire (8 %)',                   fmt(m.notaire)],
+                        ['Portage 12 mois',                       fmt(m.portage)],
+                        ['Frais de revente (3 %)',                fmt(m.fraisRevente)],
+                        [`Revente (${params.revente} €/m²)`,      fmt(m.revente)],
                       ].map(([l,v]) => (
                         <div key={l} style={{ background:'#fff', borderRadius:6, padding:'8px 10px', border:'0.5px solid #eee' }}>
                           <div style={{ fontSize:11, color:'#999', marginBottom:2 }}>{l}</div>
@@ -359,7 +470,10 @@ export default function App() {
                       ))}
                     </div>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                      <span style={{ fontSize:13, fontWeight:600, color:mColor }}>Marge nette : {fmt(m.marge)} ({m.pct}%)</span>
+                      <span style={{ fontSize:13, fontWeight:600, color:mColor }}>
+                        Marge nette : {fmt(m.marge)} ({m.pct} %)
+                        <span style={{ fontWeight:400, color:'#999', marginLeft:6 }}>avant fiscalité</span>
+                      </span>
                       {a.url && (
                         <a href={a.url} target="_blank" rel="noopener noreferrer"
                           style={{ fontSize:12, color:'#185FA5', textDecoration:'none', padding:'5px 12px', border:'0.5px solid #185FA5', borderRadius:6 }}>
@@ -404,9 +518,10 @@ export default function App() {
           <div style={{ background:'#fff', border:'0.5px solid #e5e5e5', borderRadius:12, padding:'14px 16px' }}>
             <div style={{ fontSize:14, fontWeight:500, marginBottom:12 }}>Paramètres de marge</div>
             {[
-              { label:'Travaux/m²',       key:'travaux', min:600,  max:2000, step:100, unit:'€' },
-              { label:'Surface min (m²)', key:'surfMin', min:9,    max:100,  step:1,   unit:'m²' },
-              { label:'Surface max (m²)', key:'surfMax', min:20,   max:300,  step:5,   unit:'m²' },
+              { label:'Travaux/m²',       key:'travaux', min:600,   max:2500,  step:100, unit:'€' },
+              { label:'Revente/m²',       key:'revente', min:9000,  max:16000, step:250, unit:'€' },
+              { label:'Surface min (m²)', key:'surfMin', min:9,     max:100,   step:1,   unit:'m²' },
+              { label:'Surface max (m²)', key:'surfMax', min:30,    max:300,   step:5,   unit:'m²' },
             ].map(({ label, key, min, max, step, unit }) => (
               <div key={key} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
                 <span style={{ fontSize:12, color:'#666', width:110, flexShrink:0 }}>{label}</span>
@@ -423,9 +538,11 @@ export default function App() {
           <div style={{ background:'#fff', border:'0.5px solid #e5e5e5', borderRadius:12, padding:'14px 16px' }}>
             <div style={{ fontSize:14, fontWeight:500, marginBottom:10 }}>Sources actives</div>
             {[
-              { name:'Melo API',      status:'Actif', sub:'900+ sources agrégées', color:'#27500A' },
-              { name:'DVF data.gouv', status:'Actif', sub:'Prix référence marché',  color:'#27500A' },
-              { name:'Telegram Bot',  status:'Actif', sub:'Alertes score > 75',     color:'#27500A' },
+              { name:'Bien’ici',  status:'Actif',   sub:'Alerte mail → Gmail',        color:'#27500A' },
+              { name:'SeLoger',        status:'Actif',   sub:'Alerte mail → Gmail',        color:'#27500A' },
+              { name:'Jinka',          status:'À activer', sub:'Alerte mail dans l’app', color:'#854F0B' },
+              { name:'Leboncoin',      status:'Inactif', sub:'Particuliers — non branché', color:'#999' },
+              { name:'Telegram',       status:'Actif',   sub:'Alertes score ≥ 75',         color:'#27500A' },
             ].map(s => (
               <div key={s.name} style={{ display:'flex', justifyContent:'space-between', padding:'6px 0', borderBottom:'0.5px solid #f5f5f5' }}>
                 <div>
