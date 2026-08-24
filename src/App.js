@@ -88,40 +88,57 @@ function calcScore(a, marge) {
   const jours = a.jours_en_ligne || 0;
   let score = 0;
 
-  if      (jours <= 0)  score += 20;
-  else if (jours <= 1)  score += 18;
-  else if (jours <= 3)  score += 14;
-  else if (jours <= 7)  score += 9;
-  else if (jours <= 14) score += 5;
-  else if (jours <= 30) score += 2;
+  // Fraîcheur ramenée de 20 à 10 points : en achat-revente, quatre jours
+  // d'ancienneté ne disqualifient pas une affaire.
+  if      (jours <= 0)  score += 10;
+  else if (jours <= 1)  score += 9;
+  else if (jours <= 3)  score += 7;
+  else if (jours <= 7)  score += 5;
+  else if (jours <= 14) score += 3;
+  else if (jours <= 30) score += 1;
 
-  score += paliers(marge.pct, [[30,25],[25,21],[20,17],[15,12],[10,7],[5,3]],
-                   marge.pct > 0 ? 1 : 0);
+  score += paliers(marge.pct, [[30,45],[25,38],[20,31],[15,22],[10,13],[5,5]],
+                   marge.pct > 0 ? 2 : 0);
 
+  // Décote sur le prix au m² : 30 points, le critère le plus lourd après la
+  // marge — et celui qui est mis en avant dans la fiche.
   const ref = a.prix_m2_ref || PRIX_M2_REF;
   if (a.prix_m2 > 0 && ref > 0) {
     const decote = (ref - a.prix_m2) / ref;
-    score += paliers(decote, [[0.25,25],[0.20,21],[0.15,17],[0.10,12],[0.05,6]],
-                     decote >= 0 ? 2 : 0);
+    score += paliers(decote, [[0.25,30],[0.20,25],[0.15,20],[0.10,14],[0.05,7]],
+                     decote >= 0 ? 3 : 0);
   }
 
-  const dpePoints = { G:5, F:4, E:3, D:2, C:1, B:0, A:0 };
+  // Potentiel travaux : 15 points. C'est là que se fait la marge.
+  const dpePoints = { G:15, F:12, E:9, D:6, C:3, B:0, A:0 };
   const dpe = (a.dpe || '').toUpperCase().slice(0,1);
   if (dpe in dpePoints) {
     score += dpePoints[dpe];
   } else {
     const texte = `${a.titre || ''} ${a.description || ''}`;
-    score += MOTS_REFAIT.test(texte) ? 0 : MOTS_TRAVAUX.test(texte) ? 5 : 2;
+    score += MOTS_REFAIT.test(texte) ? 0 : MOTS_TRAVAUX.test(texte) ? 15 : 6;
   }
-
-  // Le score ML est calculé côté worker : on reprend sa contribution telle
-  // qu'elle a été enregistrée plutôt que de la recalculer ici.
-  score += Math.min(Math.max((a.score_ml || 0), 0), 25);
 
   const b = a.nb_baisses || 0;
   score += b >= 3 ? 5 : b === 2 ? 3 : b === 1 ? 1 : 0;
 
+  // Localisation invérifiable : −20. Le verdict est calculé par le worker, qui
+  // détient les listes de rues ; on le lit ici plutôt que de les recopier en
+  // JavaScript, où elles dériveraient à la première correction.
+  if (a.localisation_verifiee === false) score -= 20;
+
   return Math.max(0, Math.min(Math.round(score), 100));
+}
+
+// Le repère « à retravailler » vient du worker. Repli sur une détection locale
+// pour les lignes écrites avant l'ajout de la colonne.
+function aDesTravaux(a) {
+  if (a.a_travaux !== null && a.a_travaux !== undefined) return a.a_travaux;
+  const dpe = (a.dpe || '').toUpperCase().slice(0,1);
+  if (dpe === 'F' || dpe === 'G') return true;
+  if (dpe === 'A' || dpe === 'B') return false;
+  const texte = `${a.titre || ''} ${a.description || ''}`;
+  return !MOTS_REFAIT.test(texte) && MOTS_TRAVAUX.test(texte);
 }
 
 function fmt(n) { return Math.round(n).toLocaleString('fr-FR') + ' €'; }
@@ -383,6 +400,12 @@ export default function App() {
             const m         = calcMarge(a.surface, a.prix, params);
             const mColor    = m.pct >= 15 ? '#27500A' : m.pct >= 8 ? '#854F0B' : '#A32D2D';
             const venduLoue = isVenduLoue(a.titre);
+            const refM2     = a.prix_m2_ref || PRIX_M2_REF;
+            const decotePct = refM2 > 0 && a.prix_m2 > 0
+              ? Math.round((refM2 - a.prix_m2) / refM2 * 100) : 0;
+            const pm2Color  = decotePct >= 15 ? '#27500A'
+                            : decotePct >= 5  ? '#854F0B' : '#A32D2D';
+            const travaux   = aDesTravaux(a);
             const isLiked   = likedIds.has(a.id);
 
             return (
@@ -411,6 +434,12 @@ export default function App() {
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13, fontWeight:500, marginBottom:4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.titre}</div>
                     <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:5 }}>
+                      {travaux && (
+                        <span
+                          title="Bien à retravailler : DPE F ou G, ou vocabulaire de l'annonce"
+                          style={{ fontSize:11, padding:'2px 8px', borderRadius:4, background:'#8A3A12', color:'#fff', fontWeight:700 }}
+                        >🔨 À rénover</span>
+                      )}
                       {a.dpe && <span style={{ fontSize:11, padding:'2px 7px', borderRadius:4, background:DPE_COLORS[a.dpe]||'#ddd', color:'#fff', fontWeight:500 }}>DPE {a.dpe}</span>}
                       <span style={{ fontSize:11, padding:'2px 7px', borderRadius:4, background:'#f0f0f0', color:'#666' }}>{a.source}</span>
                       {venduLoue && <span style={{ fontSize:11, padding:'2px 7px', borderRadius:4, background:'#7F77DD', color:'#fff', fontWeight:600 }}>🔑 Vendu loué</span>}
@@ -431,8 +460,15 @@ export default function App() {
                   </div>
 
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4, flexShrink:0 }}>
-                    <div style={{ fontSize:15, fontWeight:500 }}>{fmt(a.prix)}</div>
-                    <div style={{ fontSize:11, color:'#999' }}>{Math.round(a.prix_m2).toLocaleString('fr-FR')} €/m²</div>
+                    <div style={{ fontSize:18, fontWeight:800, color:pm2Color, lineHeight:1.05, letterSpacing:'-0.02em' }}>
+                      {Math.round(a.prix_m2).toLocaleString('fr-FR')} €/m²
+                    </div>
+                    <div style={{ fontSize:11, fontWeight:600, color:pm2Color }}
+                         title={`Prix de marché de référence : ${refM2.toLocaleString('fr-FR')} €/m²`}>
+                      {decotePct > 0 ? `−${decotePct}% vs marché`
+                        : decotePct < 0 ? `+${Math.abs(decotePct)}% vs marché` : 'au prix du marché'}
+                    </div>
+                    <div style={{ fontSize:13, color:'#555', marginTop:2 }}>{fmt(a.prix)}</div>
                     <div style={{ fontSize:12, fontWeight:500, color:mColor }}>{fmt(m.marge)}</div>
                     <div style={{ fontSize:11, color:mColor }}>{m.pct}% marge</div>
                     <div style={{ display:'flex', gap:4, marginTop:4 }}>
